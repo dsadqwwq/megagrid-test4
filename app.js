@@ -1,4 +1,7 @@
 // MEGA GRID Tiles — clickable selection + batch (ethers.js)
+// Improvements:
+// - Wallet connect robustness & clear status/errors
+// - Hover highlight persists for 1 second after moving the mouse away
 const C = window.MEGA_GRID_CONFIG;
 const HEX_CHAIN_ID = "0x" + C.CHAIN_ID.toString(16);
 
@@ -79,11 +82,7 @@ function toggleSelect(id, x, y){
 
 function clearSelection(){
   if (!selected.size) return;
-  // We must redraw each previously selected tile to remove outlines
-  selected.forEach(id => {
-    const y = Math.floor(id / GRID_SIZE), x = id % GRID_SIZE;
-    redrawTile(x, y);
-  });
+  selected.forEach(id => { const y = Math.floor(id / GRID_SIZE), x = id % GRID_SIZE; redrawTile(x, y); });
   selected.clear();
   updateSelCount();
 }
@@ -140,7 +139,9 @@ function fmtAddr(a){ if (!a || a === ethers.constants.AddressZero) return "—";
 function fmtWei(w){ try{ return ethers.utils.formatEther(w) + " ETH"; }catch{ return "—"; } }
 
 // Canvas rendering
-let ctx, hover = { x:-1, y:-1, id:-1 };
+let ctx;
+let hover = { x:-1, y:-1, id:-1 };
+const retainTimers = new Map(); // id -> timeout
 
 function setupCanvas(){
   const W = GRID_SIZE * PIXEL;
@@ -158,42 +159,32 @@ function setupCanvas(){
   redrawSelections();
 }
 
-function redrawTile(x, y){
-  ctx.lineWidth = 1;
+function baseFill(x, y){
   ctx.fillStyle = ((x+y)%2===0) ? "#141414" : "#101010";
   ctx.fillRect(x*PIXEL, y*PIXEL, PIXEL, PIXEL);
-  // if currently hovered, draw hover border
-  if (hover.x === x && hover.y === y) {
-    ctx.strokeStyle = "#ffffff";
-    ctx.strokeRect(x*PIXEL+0.5, y*PIXEL+0.5, PIXEL-1, PIXEL-1);
-  }
-  // if selected, draw selection border
+}
+
+function redrawTile(x, y){
+  baseFill(x, y);
   const id = y*GRID_SIZE + x;
   if (selected.has(id)) {
-    ctx.strokeStyle = "#8b5cf6"; // brand
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = "#8b5cf6"; ctx.lineWidth = 1;
     ctx.strokeRect(x*PIXEL+0.5, y*PIXEL+0.5, PIXEL-1, PIXEL-1);
   }
 }
 
-function drawHover(){
-  if (hover.x < 0) return;
-  ctx.strokeStyle = "#ffffff";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(hover.x*PIXEL+0.5, hover.y*PIXEL+0.5, PIXEL-1, PIXEL-1);
+function drawHover(x, y){
+  ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1;
+  ctx.strokeRect(x*PIXEL+0.5, y*PIXEL+0.5, PIXEL-1, PIXEL-1);
 }
 
 function drawSelect(x, y){
-  ctx.strokeStyle = "#8b5cf6";
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = "#8b5cf6"; ctx.lineWidth = 1;
   ctx.strokeRect(x*PIXEL+0.5, y*PIXEL+0.5, PIXEL-1, PIXEL-1);
 }
 
 function redrawSelections(){
-  selected.forEach(id => {
-    const y = Math.floor(id / GRID_SIZE), x = id % GRID_SIZE;
-    drawSelect(x, y);
-  });
+  selected.forEach(id => { const y = Math.floor(id / GRID_SIZE), x = id % GRID_SIZE; drawSelect(x, y); });
 }
 
 let hoverDebounce = 0;
@@ -202,22 +193,46 @@ els.grid.addEventListener("mousemove", (e)=>{
   const x = Math.floor((e.clientX - r.left) / PIXEL);
   const y = Math.floor((e.clientY - r.top) / PIXEL);
   if (x === hover.x && y === hover.y) return;
-  // redraw previous tile
-  if (hover.x >= 0){ redrawTile(hover.x, hover.y); }
+
+  // retain previous hover for 1s
+  if (hover.x >= 0){
+    const prev = { x: hover.x, y: hover.y, id: hover.id };
+    // clear any existing timer for that id
+    if (retainTimers.has(prev.id)) { clearTimeout(retainTimers.get(prev.id)); }
+    retainTimers.set(prev.id, setTimeout(()=>{
+      // when timeout elapses, only clear if not selected and not current hover
+      const cur = hover.id;
+      if (!selected.has(prev.id) && prev.id !== cur){
+        redrawTile(prev.x, prev.y);
+      }
+      retainTimers.delete(prev.id);
+    }, 1000));
+  }
+
   hover = { x, y, id: y*GRID_SIZE + x };
-  drawHover();
+  // draw hover border (doesn't erase base)
+  drawHover(x, y);
+
   clearTimeout(hoverDebounce);
   hoverDebounce = setTimeout(()=> loadTileMeta(hover.id, x, y), 120);
 });
 
 els.grid.addEventListener("mouseleave", ()=>{
-  if (hover.x >= 0){ redrawTile(hover.x, hover.y); }
+  // start retain timer for the last hover
+  if (hover.x >= 0){
+    const prev = { x: hover.x, y: hover.y, id: hover.id };
+    if (retainTimers.has(prev.id)) { clearTimeout(retainTimers.get(prev.id)); }
+    retainTimers.set(prev.id, setTimeout(()=>{
+      if (!selected.has(prev.id)){ redrawTile(prev.x, prev.y); }
+      retainTimers.delete(prev.id);
+    }, 1000));
+  }
   hover = {x:-1,y:-1,id:-1};
   els.tileTitle.textContent = "Hover a tile";
   els.tid.textContent = "—"; els.coords.textContent="—"; els.owner.textContent="—"; els.statusTile.textContent="—"; els.price.textContent="—";
 });
 
-// NEW: click to toggle selection
+// Click to toggle selection
 els.grid.addEventListener("click", (e)=>{
   const r = els.grid.getBoundingClientRect();
   const x = Math.floor((e.clientX - r.left) / PIXEL);
@@ -260,35 +275,21 @@ function showPanel(which, listing=null, owner=null){
   document.getElementById("listBox").style.display = (which==="list") ? "block" : "none";
   document.getElementById("buyBox").style.display   = (which==="buy")   ? "block" : "none";
 
-  // Helpers to build batch entries based on selection or hover
   const targets = selected.size ? Array.from(selected) : (hover.id>=0 ? [hover.id] : []);
   function limitTargets(arr){ const room = 10 - batch.length; return arr.slice(0, Math.max(0, room)); }
 
   if (which==="buy" && listing){
-    document.getElementById("buyBtn").onclick = () => {
-      const ids = limitTargets(targets);
-      if (!ids.length) return;
-      pushBatch(ids.map(id => ({ type:"buy", tokenId:id, priceWei: listing.price })));
-    };
-    document.getElementById("cancelBtn").onclick = () => {
-      const ids = limitTargets(targets);
-      if (!ids.length) return;
-      pushBatch(ids.map(id => ({ type:"cancel", tokenId:id })));
-    };
+    els.buyBtn.onclick = () => { const ids = limitTargets(targets); if (!ids.length) return; pushBatch(ids.map(id => ({ type:"buy", tokenId:id, priceWei: listing.price }))); };
+    els.cancelBtn.onclick = () => { const ids = limitTargets(targets); if (!ids.length) return; pushBatch(ids.map(id => ({ type:"cancel", tokenId:id }))); };
   }
   if (which==="claim"){
-    document.getElementById("claimBtn").onclick = () => {
-      const ids = limitTargets(targets);
-      if (!ids.length) return;
-      pushBatch(ids.map(id => ({ type:"claim", tokenId:id })));
-    };
+    els.claimBtn.onclick = () => { const ids = limitTargets(targets); if (!ids.length) return; pushBatch(ids.map(id => ({ type:"claim", tokenId:id }))); };
   }
   if (which==="list"){
-    document.getElementById("listBtn").onclick = () => {
-      const v = (document.getElementById("listPrice").value || "0").trim();
+    els.listBtn.onclick = () => {
+      const v = (els.listPrice.value || "0").trim();
       let priceWei; try { priceWei = ethers.utils.parseEther(v); } catch { return alert("Bad price"); }
-      const ids = limitTargets(targets);
-      if (!ids.length) return;
+      const ids = limitTargets(targets); if (!ids.length) return;
       pushBatch(ids.map(id => ({ type:"list", tokenId:id, priceWei })));
     };
   }
@@ -298,8 +299,12 @@ function setStatus(t){ els.status.textContent = t; }
 
 async function connect(){
   try{
-    if (!window.ethereum) return alert("No wallet found");
-    const chain = await window.ethereum.request({ method:"eth_chainId" });
+    if (!window.ethereum) {
+      setStatus("No wallet found — install MetaMask");
+      alert("No wallet found. Install MetaMask or disable Brave Shields for this site.");
+      return;
+    }
+    let chain = await window.ethereum.request({ method:"eth_chainId" }).catch(()=>null);
     if (chain !== HEX_CHAIN_ID){
       try { await window.ethereum.request({ method:"wallet_switchEthereumChain", params:[{ chainId: HEX_CHAIN_ID }] }); }
       catch {
@@ -310,14 +315,24 @@ async function connect(){
         }]});
       }
     }
-    provider = new ethers.providers.Web3Provider(window.ethereum, "any");
-    await provider.send("eth_requestAccounts", []);
-    signer = provider.getSigner();
+    const web3 = new ethers.providers.Web3Provider(window.ethereum, "any");
+    await web3.send("eth_requestAccounts", []);
+    signer = web3.getSigner();
+    provider = web3; // use same for reads after connect
     tileWrite = new ethers.Contract(C.TILES_ADDRESS, TILE_ABI, signer);
-    setStatus("connected " + (await signer.getAddress()).slice(0,6) + "…" + (await signer.getAddress()).slice(-4));
+    tileRead  = new ethers.Contract(C.TILES_ADDRESS, TILE_ABI, provider);
+    const addr = await signer.getAddress();
+    setStatus("connected " + addr.slice(0,6) + "…" + addr.slice(-4));
+
+    // react to account/chain changes
+    if (window.ethereum && window.ethereum.on){
+      window.ethereum.on("accountsChanged", (accs)=>{ if (accs && accs[0]) setStatus("connected " + accs[0].slice(0,6)+"…"+accs[0].slice(-4)); });
+      window.ethereum.on("chainChanged", ()=>window.location.reload());
+    }
   }catch(e){
     console.error("connect", e);
-    alert("Wallet connection failed");
+    setStatus("connect failed");
+    alert("Wallet connection failed. See console for details.");
   }
 }
 
@@ -342,11 +357,7 @@ async function init(){
   setupCanvas();
   subscribeEvents();
 
-  els.pxSize.addEventListener("change", ()=>{
-    PIXEL = Math.max(1, Math.min(12, Number(els.pxSize.value) || 2));
-    setupCanvas();
-  });
-
+  els.pxSize.addEventListener("change", ()=>{ PIXEL = Math.max(1, Math.min(12, Number(els.pxSize.value) || 2)); setupCanvas(); });
   els.connect.addEventListener("click", connect);
   els.resetView.addEventListener("click", setupCanvas);
   els.clearSelection.addEventListener("click", clearSelection);
