@@ -1,4 +1,4 @@
-// MEGA GRID — self-loading libs with multi-CDN fallback + wallet connect
+// MEGA GRID — ethers.js version (no viem)
 const { RPC_URL, CHAIN_ID, CONTRACT_ADDRESS } = window.MEGA_GRID_CONFIG;
 const HEX_CHAIN_ID = "0x" + CHAIN_ID.toString(16);
 
@@ -18,60 +18,58 @@ async function loadFromAny(urls, globalName){
 
 (async()=>{
   await loadFromAny([
-    'https://cdn.jsdelivr.net/npm/pixi.js@7/dist/pixi.min.js',
-    'https://unpkg.com/pixi.js@7/dist/pixi.min.js'
-  ],'PIXI');
-  await loadFromAny([
-    'https://cdn.jsdelivr.net/npm/viem@2.9.14/dist/viem.umd.min.js',
-    'https://unpkg.com/viem@2.9.14/dist/viem.umd.min.js'
-  ],'viem');
+    'https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js',
+    'https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js',
+    'https://unpkg.com/ethers@5.7.2/dist/ethers.umd.min.js'
+  ],'ethers');
   startApp();
-})().catch(e=>{alert('Could not load library: '+e.message)});
+})().catch(e=>{alert('Could not load ethers.js: '+e.message)});
 
 async function startApp(){
   const ABI=[
-    { "inputs":[{"internalType":"uint256","name":"gridSize_","type":"uint256"}], "stateMutability":"nonpayable","type":"constructor"},
-    { "inputs":[], "name":"GRID_SIZE","outputs":[{"internalType":"uint256","name":"","type":"uint256"}], "stateMutability":"view","type":"function"},
-    { "inputs":[{"internalType":"uint256","name":"id","type":"uint256"}], "name":"colorOf","outputs":[{"internalType":"uint32","name":"","type":"uint32"}], "stateMutability":"view","type":"function"},
-    { "inputs":[{"internalType":"uint256[]","name":"ids","type":"uint256[]"},{"internalType":"uint32[]","name":"rgbs","type":"uint32[]"}], "name":"colorPixels","outputs":[], "stateMutability":"nonpayable","type":"function"}
+    {"inputs":[{"internalType":"uint256","name":"gridSize_","type":"uint256"}],"stateMutability":"nonpayable","type":"constructor"},
+    {"inputs":[],"name":"GRID_SIZE","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+    {"inputs":[{"internalType":"uint256","name":"id","type":"uint256"}],"name":"colorOf","outputs":[{"internalType":"uint32","name":"","type":"uint32"}],"stateMutability":"view","type":"function"},
+    {"inputs":[{"internalType":"uint256[]","name":"ids","type":"uint256[]"},{"internalType":"uint32[]","name":"rgbs","type":"uint32[]"}],"name":"colorPixels","outputs":[],"stateMutability":"nonpayable","type":"function"},
+    {"anonymous":false,"inputs":[{"indexed":true,"internalType":"uint256","name":"id","type":"uint256"},{"indexed":false,"internalType":"uint32","name":"rgb","type":"uint32"}],"name":"PixelColored","type":"event"},
+    {"anonymous":false,"inputs":[{"indexed":false,"internalType":"uint256[]","name":"ids","type":"uint256[]"},{"indexed":false,"internalType":"uint32[]","name":"rgbs","type":"uint32[]"}],"name":"PixelsColored","type":"event"}
   ];
+
   const statusEl=document.getElementById('status'),canvasWrap=document.getElementById('canvasWrap'),
         connectBtn=document.getElementById('connect'),flushBtn=document.getElementById('flush'),
         modeSel=document.getElementById('mode'),picker=document.getElementById('picker'),
         gridSizeLabel=document.getElementById('gridSizeLabel'),pxSizeInput=document.getElementById('pxSize');
   const rgbIntToHex=r=>(r>>>0)&0xffffff,hexToRgbInt=h=>(h>>>0)&0xffffff;
   let GRID_SIZE=128,PIXEL_SIZE=Number(pxSizeInput.value)||5,buffer=new Map();
-  let app,stageGraphics;
-  function setupPixi(){
-    const w=GRID_SIZE*PIXEL_SIZE,h=w;
-    app=new PIXI.Application({width:w,height:h,background:'#0b0b0b'});
-    canvasWrap.innerHTML='';canvasWrap.appendChild(app.view);
-    stageGraphics=new PIXI.Graphics();app.stage.addChild(stageGraphics);
+  let appCanvas,ctx;
+  function setupCanvas(){
+    const w=GRID_SIZE*PIXEL_SIZE;appCanvas=document.createElement('canvas');
+    appCanvas.width=w;appCanvas.height=w;ctx=appCanvas.getContext('2d');canvasWrap.innerHTML='';canvasWrap.appendChild(appCanvas);
+    for(let y=0;y<GRID_SIZE;y++){for(let x=0;x<GRID_SIZE;x++){ctx.fillStyle=((x+y)%2===0)?'#141414':'#101010';ctx.fillRect(x*PIXEL_SIZE,y*PIXEL_SIZE,PIXEL_SIZE,PIXEL_SIZE);}}
+    appCanvas.onclick=e=>{const r=appCanvas.getBoundingClientRect(),gx=Math.floor((e.clientX-r.left)/PIXEL_SIZE),gy=Math.floor((e.clientY-r.top)/PIXEL_SIZE);
+      const id=gy*GRID_SIZE+gx,hex=(modeSel.value==='picker')?Number('0x'+picker.value.slice(1)):(Math.random()*0xffffff)|0;buffer.set(id,hex);paintLocal(gx,gy,hex);};
   }
-  function paintLocal(x,y,hex){stageGraphics.beginFill(hex);stageGraphics.drawRect(x*PIXEL_SIZE,y*PIXEL_SIZE,PIXEL_SIZE,PIXEL_SIZE);stageGraphics.endFill()}
-  const {createPublicClient,http}=viem;
-  const publicClient=createPublicClient({transport:http(RPC_URL),chain:{id:CHAIN_ID}});
-  setupPixi();
+  function paintLocal(x,y,hex){ctx.fillStyle='#'+hex.toString(16).padStart(6,'0');ctx.fillRect(x*PIXEL_SIZE,y*PIXEL_SIZE,PIXEL_SIZE,PIXEL_SIZE);}
+  const provider=new ethers.providers.JsonRpcProvider(RPC_URL);
+  const readContract=new ethers.Contract(CONTRACT_ADDRESS,ABI,provider);
+  try{GRID_SIZE=Number(await readContract.GRID_SIZE())||128;}catch(e){console.warn('GRID_SIZE read failed',e.message);}gridSizeLabel.textContent=GRID_SIZE;setupCanvas();
+  readContract.on('PixelColored',(id,rgb)=>{id=Number(id);rgb=Number(rgb);paintLocal(id%GRID_SIZE,Math.floor(id/GRID_SIZE),rgbIntToHex(rgb));});
+  readContract.on('PixelsColored',(ids,rgbs)=>{ids=ids.map(Number);rgbs=rgbs.map(Number);for(let i=0;i<ids.length;i++){const id=ids[i];paintLocal(id%GRID_SIZE,Math.floor(id/GRID_SIZE),rgbIntToHex(rgbs[i]));}});
+  let walletProvider,signer,writeContract;
   connectBtn.onclick=async()=>{
-    if(!window.ethereum)return alert('No wallet');
-    const target=HEX_CHAIN_ID;let cur=await window.ethereum.request({method:'eth_chainId'});
-    if(cur!==target)await window.ethereum.request({method:'wallet_switchEthereumChain',params:[{chainId:target}]}).catch(async()=>{
-      await window.ethereum.request({method:'wallet_addEthereumChain',params:[{chainId:target,chainName:'MegaETH Testnet',nativeCurrency:{name:'MEGA',symbol:'MEGA',decimals:18},rpcUrls:[RPC_URL]}]})
-    });
-    const [addr]=await window.ethereum.request({method:'eth_requestAccounts'});
-    const {createWalletClient,custom}=viem;
-    walletClient=createWalletClient({chain:{id:CHAIN_ID},transport:custom(window.ethereum)});
-    statusEl.textContent='connected '+addr.slice(0,6)+'...'+addr.slice(-4);
-  };
-  canvasWrap.onclick=e=>{
-    const r=canvasWrap.getBoundingClientRect(),gx=Math.floor((e.clientX-r.left)/PIXEL_SIZE),gy=Math.floor((e.clientY-r.top)/PIXEL_SIZE);
-    const id=gy*GRID_SIZE+gx,hex=(modeSel.value==='picker')?Number('0x'+picker.value.slice(1)):(Math.random()*0xffffff)|0;
-    buffer.set(id,hex);paintLocal(gx,gy,hex);
+    if(!window.ethereum)return alert('No wallet found');
+    let current=await window.ethereum.request({method:'eth_chainId'});
+    if(current!==HEX_CHAIN_ID){try{await window.ethereum.request({method:'wallet_switchEthereumChain',params:[{chainId:HEX_CHAIN_ID}]});}
+    catch{await window.ethereum.request({method:'wallet_addEthereumChain',params:[{chainId:HEX_CHAIN_ID,chainName:'MegaETH Testnet',nativeCurrency:{name:'MEGA',symbol:'MEGA',decimals:18},rpcUrls:[RPC_URL]}]});}}
+    walletProvider=new ethers.providers.Web3Provider(window.ethereum,'any');
+    await walletProvider.send('eth_requestAccounts',[]);signer=walletProvider.getSigner();
+    writeContract=new ethers.Contract(CONTRACT_ADDRESS,ABI,signer);
+    const addr=await signer.getAddress();statusEl.textContent='connected: '+addr.slice(0,6)+'...'+addr.slice(-4);
   };
   flushBtn.onclick=async()=>{
-    if(!walletClient)return alert('connect wallet first');
+    if(!writeContract)return alert('Connect wallet first');if(buffer.size===0){statusEl.textContent='no changes';return;}
     const ids=[...buffer.keys()],rgbs=[...buffer.values()].map(hexToRgbInt);
-    const tx=await walletClient.writeContract({account:(await walletClient.requestAddresses())[0],address:CONTRACT_ADDRESS,abi:ABI,functionName:'colorPixels',args:[ids,rgbs]});
-    statusEl.textContent='tx '+tx.slice(0,10)+'...';buffer.clear();
-  };
+    try{statusEl.textContent='sending '+ids.length+' tiles...';const tx=await writeContract.colorPixels(ids,rgbs);
+      statusEl.textContent='tx: '+tx.hash.slice(0,10)+'...';buffer.clear();}catch(e){statusEl.textContent='tx failed';console.error(e);}}
+  pxSizeInput.onchange=()=>{PIXEL_SIZE=Math.max(2,Math.min(20,Number(pxSizeInput.value)||5));setupCanvas();};
 }
