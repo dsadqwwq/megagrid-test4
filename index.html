@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MEGA GRID — Testnet Paint Demo</title>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="wrap nav">
+      <div class="brand"><div class="logo"></div><span>MEGA GRID</span></div>
+      <nav><a href="https://megagrid.fun" target="_blank">Home</a></nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <h1 class="title">Paint <span class="grad">tiles</span> on-chain</h1>
+    <div class="cta">
+      <button id="connect" class="btn brand">Connect Wallet</button>
+      <button id="flush" class="btn">Send Batch</button>
+      <span id="status" class="muted"></span>
+    </div>
+    <div class="panel" style="margin-top:16px;">
+      <label>Grid: <strong id="gridSizeLabel">128</strong></label>
+      <label>Pixel size: <input id="pxSize" type="number" value="5" min="2" max="20"></label>
+      <select id="mode">
+        <option value="random">Random colors</option>
+        <option value="picker">Use color picker</option>
+      </select>
+      <input type="color" id="picker" value="#66cc88">
+      <div id="canvasWrap" style="margin-top:12px;"></div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="wrap"><div>© <span id="year"></span> MEGA GRID</div></div>
+    <script>document.getElementById('year').textContent=new Date().getFullYear()</script>
+  </footer>
+
+  <script defer src="/config.js"></script>
+  <script defer src="/app.js"></script>
+</body>
+</html>
